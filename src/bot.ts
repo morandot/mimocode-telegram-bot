@@ -171,6 +171,26 @@ export function formatEventFull(event: Record<string, unknown>): string {
   }
 }
 
+/**
+ * Above this many chunks, sendLong ships the response as a single .txt
+ * document instead of a flood of chat messages. High enough that ordinary
+ * multi-part replies still arrive inline.
+ */
+export const DOCUMENT_FALLBACK_THRESHOLD = 5;
+
+/** True when a response is long enough to prefer a document over N messages. */
+export function shouldFallbackToDocument(chunkCount: number): boolean {
+  return chunkCount > DOCUMENT_FALLBACK_THRESHOLD;
+}
+
+/**
+ * Build the plain-text body for the document fallback: strip Telegram HTML
+ * tags from each chunk and rejoin with a blank line so paragraphs survive.
+ */
+export function prepareDocumentContent(chunks: string[]): string {
+  return chunks.map((c) => c.replace(/<[^>]+>/g, "")).join("\n\n");
+}
+
 export function createBot(config: Config) {
   const bot = new Bot(config.telegramToken);
   const mimo = new MimoClient(config);
@@ -191,6 +211,22 @@ export function createBot(config: Config) {
 
   async function sendLong(chatId: string, text: string) {
     const chunks = formatLong(text);
+
+    // Too many chunks → send as a single document instead of flooding the
+    // chat. Fall back to inline messages if the document send fails.
+    if (shouldFallbackToDocument(chunks.length)) {
+      const body = prepareDocumentContent(chunks);
+      try {
+        await bot.api.sendDocument(
+          chatId,
+          new InputFile(Buffer.from(body, "utf-8"), "response.txt"),
+        );
+        return;
+      } catch {
+        // fall through to per-chunk sending below
+      }
+    }
+
     for (const chunk of chunks) {
       try {
         await bot.api.sendMessage(chatId, chunk, { parse_mode: "HTML" });
