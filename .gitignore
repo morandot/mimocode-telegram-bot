@@ -9,3 +9,16 @@ ecosystem.config.cjs
 start.sh
 work/
 .pm2/
+
+# Alma snapshots & workspace
+.alma-snapshots/
+.alma/
+
+# Environment overrides
+.env.local
+.env.production
+.env.development
+
+# OS junk
+.DS_Store
+Thumbs.db
