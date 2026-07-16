@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { Config } from "./config.js";
-import { LineBuffer, MimoClient } from "./mimo.js";
+import { extractSessionId, LineBuffer, MimoClient } from "./mimo.js";
 
 const baseConfig: Config = {
   telegramToken: "test-token",
@@ -17,6 +17,69 @@ const baseConfig: Config = {
 };
 
 // ── session management ────────────────────────────────
+
+// ── extractSessionId ────────────────────────────────────
+// Session ID extraction must stay backward compatible across MiMoCode CLI
+// versions: legacy flat fields (sessionID / sessionId) and the v0.1.6+
+// nested/structured forms (event.session.id, {"type":"session","id":...}).
+
+describe("extractSessionId", () => {
+  it("reads legacy flat sessionID (camelCase)", () => {
+    expect(extractSessionId({ sessionID: "sess-flat-upper" })).toBe(
+      "sess-flat-upper",
+    );
+  });
+
+  it("reads legacy flat sessionId", () => {
+    expect(extractSessionId({ sessionId: "sess-flat" })).toBe("sess-flat");
+  });
+
+  it("reads v0.1.6+ nested event.session.id", () => {
+    expect(extractSessionId({ session: { id: "sess-nested" } })).toBe(
+      "sess-nested",
+    );
+  });
+
+  it("reads v0.1.6+ session meta line { type: session, id }", () => {
+    expect(extractSessionId({ type: "session", id: "sess-meta" })).toBe(
+      "sess-meta",
+    );
+  });
+
+  it("reads v0.1.6+ session_start meta line", () => {
+    expect(
+      extractSessionId({ type: "session_start", session_id: "sess-start" }),
+    ).toBe("sess-start");
+  });
+
+  it("returns undefined when no session field is present", () => {
+    expect(extractSessionId({ type: "text", part: { text: "hi" } })).toBe(
+      undefined,
+    );
+  });
+
+  it("ignores empty / non-string values", () => {
+    expect(extractSessionId({ sessionID: "" })).toBeUndefined();
+    expect(extractSessionId({ sessionId: 123 })).toBeUndefined();
+    expect(extractSessionId({ session: { id: 42 } })).toBeUndefined();
+    expect(extractSessionId({ session: "not-an-object" })).toBeUndefined();
+  });
+
+  it("prefers legacy flat field over the nested v0.1.6 form", () => {
+    // Flat field is consulted before nested, matching legacy behavior.
+    expect(
+      extractSessionId({ sessionID: "flat", session: { id: "nested" } }),
+    ).toBe("flat");
+  });
+
+  it("sessionId (lowercase d) wins when both flat fields are present", () => {
+    // Original sendMessage had two separate `if`s; the second (sessionId)
+    // overwrote the first. This ordering must be preserved exactly.
+    expect(extractSessionId({ sessionID: "upper", sessionId: "lower" })).toBe(
+      "lower",
+    );
+  });
+});
 
 describe("MimoClient session management", () => {
   it("setSession / getSessionId round-trips", () => {

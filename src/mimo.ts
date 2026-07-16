@@ -45,6 +45,58 @@ export class LineBuffer {
   }
 }
 
+/**
+ * Extract a session id from a MiMoCode stream event across CLI versions.
+ *
+ * Legacy formats (pre-v0.1.6) carry the id as a flat top-level string:
+ *   `event.sessionID` / `event.sessionId`.
+ *
+ * v0.1.6+ may nest it (`event.session.id`) or emit it as a structured
+ * meta line (`{ type: "session" | "session_start", id | session_id }`).
+ *
+ * The two legacy flat fields mirror the original sendMessage behavior exactly:
+ * both are checked and `sessionId` wins when both are present (it was the
+ * second `if` that overwrote the result). Newer formats are only consulted
+ * when no legacy id was found. Returns undefined when none are present.
+ */
+export function extractSessionId(
+  event: Record<string, unknown>,
+): string | undefined {
+  // Legacy flat fields — accumulate (not early-return) so the original
+  // two-`if` overwrite semantics are preserved: sessionId wins over sessionID.
+  let id: string | undefined;
+  if (typeof event.sessionID === "string" && event.sessionID) {
+    id = event.sessionID;
+  }
+  if (typeof event.sessionId === "string" && event.sessionId) {
+    id = event.sessionId;
+  }
+  if (id) return id;
+
+  // v0.1.6+: nested session object.
+  const session = event.session;
+  if (session && typeof session === "object") {
+    const nestedId = (session as Record<string, unknown>).id;
+    if (typeof nestedId === "string" && nestedId) return nestedId;
+  }
+
+  // v0.1.6+: structured meta line { type: "session", id }.
+  if (event.type === "session" && typeof event.id === "string" && event.id) {
+    return event.id;
+  }
+
+  // v0.1.6+: session_start meta line.
+  if (
+    event.type === "session_start" &&
+    typeof event.session_id === "string" &&
+    event.session_id
+  ) {
+    return event.session_id;
+  }
+
+  return undefined;
+}
+
 export class MimoClient {
   private workDir: string;
   private readonly mimoApiUrl?: string;
@@ -236,11 +288,9 @@ export class MimoClient {
               fullContent += part.text;
             }
           }
-          if (typeof event.sessionID === "string" && event.sessionID) {
-            newSessionId = event.sessionID;
-          }
-          if (typeof event.sessionId === "string" && event.sessionId) {
-            newSessionId = event.sessionId;
+          const sid = extractSessionId(event);
+          if (sid) {
+            newSessionId = sid;
           }
         } catch {
           // skip non-JSON lines (debug output mixed into stdout, etc.)
