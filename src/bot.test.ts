@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { checkAuth, isInsideRoot, sanitizeError } from "./bot.js";
+import { checkAuth, createBot, isInsideRoot, sanitizeError } from "./bot.js";
 import type { Config } from "./config.js";
 
 const baseConfig: Config = {
@@ -178,5 +178,21 @@ describe("config and command gates", () => {
   it("workdirBrowseEnabled=true allows /workdir access", () => {
     const cfg = { ...baseConfig, workdirBrowseEnabled: true };
     expect(cfg.workdirBrowseEnabled).toBe(true);
+  });
+});
+
+// ── createBot registers commands (smoke test) ──────────
+// Constructing the bot must register every command handler, including the
+// newer /think, without throwing. grammy stores handlers in memory; no
+// network is touched by createBot itself.
+
+describe("createBot command registration", () => {
+  it("registers all commands without throwing", () => {
+    const bot = createBot(baseConfig);
+    // grammy exposes the number of registered handlers via the internal
+    // composer; we just assert the bot object is usable.
+    expect(bot).toBeDefined();
+    // Calling bot.start is network-bound, so we stop here — registration
+    // itself (including /think) is the behavior under test.
   });
 });

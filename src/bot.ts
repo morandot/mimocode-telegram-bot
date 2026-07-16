@@ -420,7 +420,8 @@ export function createBot(config: Config) {
         `<b>Modes</b>\n` +
         `/use — Switch agent (build/plan/compose)\n` +
         `/compose — Compose mode workflow\n` +
-        `/max — Max parallel sampling\n\n` +
+        `/max — Max parallel sampling\n` +
+        `/think — Run with thinking mode\n\n` +
         `<b>Info</b>\n` +
         `/model — Switch model\n` +
         `/models — List models\n` +
@@ -644,6 +645,26 @@ export function createBot(config: Config) {
     await runMimoCommand(ctx, text, {
       logPrefix: "max",
       mimoOpts: { variant: "max" },
+    });
+  });
+
+  // ── /think ───────────────────────────────────────────
+  // Like a plain chat, but enables extended reasoning (--thinking) for the
+  // single run. The --thinking flag is already wired into sendMessage; this
+  // just exposes it as a Telegram command.
+  bot.command("think", async (ctx) => {
+    if (!checkAuth(ctx, config)) return;
+    const text = ctx.match?.trim();
+    if (!text) {
+      await ctx.reply(
+        `Usage: /think &lt;your question&gt;\n\n` +
+          `Runs with thinking mode enabled for extended reasoning.`,
+      );
+      return;
+    }
+    await runMimoCommand(ctx, text, {
+      logPrefix: "think",
+      mimoOpts: { thinking: true },
     });
   });
 
