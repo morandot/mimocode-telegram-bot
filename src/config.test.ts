@@ -73,6 +73,7 @@ describe("isAllowed", () => {
     workdirRoot: "/tmp",
     workdirBrowseEnabled: false,
     skipPermissions: false,
+    runTimeoutMs: 0,
     showText: "full",
     showReasoning: "off",
     showToolUse: "off",
@@ -168,5 +169,56 @@ describe("loadConfig", () => {
     process.env.MIMO_API_URL = "http://localhost:3000";
     const config = loadConfig();
     expect(config.mimoApiUrl).toBe("http://localhost:3000");
+  });
+
+  it("defaults runTimeoutMs to 300000 (5 min)", () => {
+    delete process.env.MIMO_RUN_TIMEOUT_MS;
+    const config = loadConfig();
+    expect(config.runTimeoutMs).toBe(300_000);
+  });
+
+  it("parses MIMO_RUN_TIMEOUT_MS as milliseconds", () => {
+    process.env.MIMO_RUN_TIMEOUT_MS = "600000";
+    const config = loadConfig();
+    expect(config.runTimeoutMs).toBe(600_000);
+  });
+
+  it("0 means no timeout (unlimited)", () => {
+    process.env.MIMO_RUN_TIMEOUT_MS = "0";
+    const config = loadConfig();
+    expect(config.runTimeoutMs).toBe(0);
+  });
+
+  it("rejects non-numeric MIMO_RUN_TIMEOUT_MS", () => {
+    process.env.MIMO_RUN_TIMEOUT_MS = "abc";
+    expect(() => loadConfig()).toThrow("MIMO_RUN_TIMEOUT_MS");
+  });
+
+  it("rejects negative MIMO_RUN_TIMEOUT_MS", () => {
+    process.env.MIMO_RUN_TIMEOUT_MS = "-1";
+    expect(() => loadConfig()).toThrow("MIMO_RUN_TIMEOUT_MS");
+  });
+
+  it("treats whitespace-only MIMO_RUN_TIMEOUT_MS as unset (default)", () => {
+    process.env.MIMO_RUN_TIMEOUT_MS = "   ";
+    const config = loadConfig();
+    expect(config.runTimeoutMs).toBe(300_000);
+  });
+
+  it("treats empty-string MIMO_RUN_TIMEOUT_MS as unset (default)", () => {
+    process.env.MIMO_RUN_TIMEOUT_MS = "";
+    const config = loadConfig();
+    expect(config.runTimeoutMs).toBe(300_000);
+  });
+
+  it("rejects fractional MIMO_RUN_TIMEOUT_MS (must be integer ms)", () => {
+    process.env.MIMO_RUN_TIMEOUT_MS = "1.5";
+    expect(() => loadConfig()).toThrow("MIMO_RUN_TIMEOUT_MS");
+  });
+
+  it("trims surrounding whitespace from MIMO_RUN_TIMEOUT_MS", () => {
+    process.env.MIMO_RUN_TIMEOUT_MS = "  600000  ";
+    const config = loadConfig();
+    expect(config.runTimeoutMs).toBe(600_000);
   });
 });

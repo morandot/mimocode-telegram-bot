@@ -33,6 +33,13 @@ export type Config = {
   readonly workdirBrowseEnabled: boolean;
   readonly mimoApiUrl?: string;
   readonly skipPermissions: boolean;
+  /**
+   * Wall-clock timeout (ms) for a single `mimo run` invoked via sendMessage.
+   * 0 disables the timeout. Default 300000 (5 min) guards against hung
+   * processes (provider stalls, infinite loops) that would otherwise sit in
+   * memory until the user manually /cancel's.
+   */
+  readonly runTimeoutMs: number;
   readonly showText: Verbosity;
   readonly showReasoning: Verbosity;
   readonly showToolUse: Verbosity;
@@ -53,6 +60,24 @@ export function loadConfig(): Config {
     );
   }
 
+  const runTimeoutMsRaw = process.env.MIMO_RUN_TIMEOUT_MS;
+  const runTimeoutMsTrimmed = runTimeoutMsRaw?.trim();
+  // Treat unset/empty as the default. Use Number on the trimmed value so
+  // whitespace-only input doesn't silently coerce to 0 (= disabled).
+  const runTimeoutMs =
+    runTimeoutMsTrimmed === undefined || runTimeoutMsTrimmed === ""
+      ? 300_000
+      : Number(runTimeoutMsTrimmed);
+  if (
+    !Number.isInteger(runTimeoutMs) ||
+    runTimeoutMs < 0 ||
+    Number.isNaN(runTimeoutMs)
+  ) {
+    throw new Error(
+      `MIMO_RUN_TIMEOUT_MS must be a non-negative integer number of milliseconds (got "${runTimeoutMsRaw}"). Use 0 to disable the timeout.`,
+    );
+  }
+
   return {
     telegramToken: env("TELEGRAM_BOT_TOKEN"),
     allowedUserIds,
@@ -64,6 +89,7 @@ export function loadConfig(): Config {
     workdirBrowseEnabled: envBool("MIMO_WORKDIR_BROWSE", false),
     mimoApiUrl: process.env.MIMO_API_URL || undefined,
     skipPermissions: envBool("MIMO_SKIP_PERMISSIONS", false),
+    runTimeoutMs,
     showText: envVerbosity("MIMO_SHOW_TEXT", "full"),
     showReasoning: envVerbosity("MIMO_SHOW_REASONING", "off"),
     showToolUse: envVerbosity("MIMO_SHOW_TOOL_USE", "off"),

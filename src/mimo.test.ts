@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { type ChildProcess, spawn } from "node:child_process";
 import type { Config } from "./config.js";
 import { extractSessionId, LineBuffer, MimoClient } from "./mimo.js";
 
@@ -9,6 +10,7 @@ const baseConfig: Config = {
   workdirRoot: "/tmp",
   workdirBrowseEnabled: false,
   skipPermissions: false,
+  runTimeoutMs: 0,
   showText: "full",
   showReasoning: "off",
   showToolUse: "off",
@@ -196,5 +198,148 @@ describe("LineBuffer", () => {
 
   it("flush returns empty string when nothing buffered", () => {
     expect(new LineBuffer().flush()).toBe("");
+  });
+});
+
+// ── extractSessionId ────────────────────────────────────
+// Session ID extraction must stay backward compatible across MiMoCode CLI
+// versions: legacy flat fields (sessionID / sessionId) and the v0.1.6+
+// nested/structured forms (event.session.id, {"type":"session","id":...}).
+
+describe("extractSessionId", () => {
+  it("reads legacy flat sessionID (camelCase)", () => {
+    expect(extractSessionId({ sessionID: "sess-flat-upper" })).toBe(
+      "sess-flat-upper",
+    );
+  });
+
+  it("reads legacy flat sessionId", () => {
+    expect(extractSessionId({ sessionId: "sess-flat" })).toBe("sess-flat");
+  });
+
+  it("reads v0.1.6+ nested event.session.id", () => {
+    expect(extractSessionId({ session: { id: "sess-nested" } })).toBe(
+      "sess-nested",
+    );
+  });
+
+  it("reads v0.1.6+ session meta line { type: session, id }", () => {
+    expect(extractSessionId({ type: "session", id: "sess-meta" })).toBe(
+      "sess-meta",
+    );
+  });
+
+  it("reads v0.1.6+ session_start meta line", () => {
+    expect(
+      extractSessionId({ type: "session_start", session_id: "sess-start" }),
+    ).toBe("sess-start");
+  });
+
+  it("returns undefined when no session field is present", () => {
+    expect(extractSessionId({ type: "text", part: { text: "hi" } })).toBe(
+      undefined,
+    );
+  });
+
+  it("ignores empty / non-string values", () => {
+    expect(extractSessionId({ sessionID: "" })).toBeUndefined();
+    expect(extractSessionId({ sessionId: 123 })).toBeUndefined();
+    expect(extractSessionId({ session: { id: 42 } })).toBeUndefined();
+    expect(extractSessionId({ session: "not-an-object" })).toBeUndefined();
+  });
+
+  it("prefers legacy flat field over the nested v0.1.6 form", () => {
+    // Flat field is consulted before nested, matching legacy behavior.
+    expect(
+      extractSessionId({ sessionID: "flat", session: { id: "nested" } }),
+    ).toBe("flat");
+  });
+
+  it("sessionId (lowercase d) wins when both flat fields are present", () => {
+    // Original sendMessage had two separate `if`s; the second (sessionId)
+    // overwrote the first. This ordering must be preserved exactly.
+    expect(extractSessionId({ sessionID: "upper", sessionId: "lower" })).toBe(
+      "lower",
+    );
+  });
+});
+
+// ── run timeout ────────────────────────────────────────
+// sendMessage must abort a hung mimo process after runTimeoutMs. We can't
+// spawn the real `mimo` CLI in unit tests, so subclasses override
+// spawnProcess to launch a controlled stand-in process.
+
+// Emits one JSON text event then exits 0 — a "successful" fake mimo run.
+class FakeMimoClient extends MimoClient {
+  constructor(
+    config: Config,
+    private readonly script: string,
+  ) {
+    super(config);
+  }
+  protected override spawnProcess(_args: string[]): ChildProcess {
+    return spawn("sh", ["-c", this.script], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+}
+
+// Long-running stand-in that never exits on its own — simulates a stall.
+class HangingMimoClient extends MimoClient {
+  protected override spawnProcess(_args: string[]): ChildProcess {
+    return spawn("sleep", ["30"], { stdio: ["ignore", "pipe", "pipe"] });
+  }
+}
+
+describe("MimoClient run timeout", () => {
+  it("rejects when the run exceeds runTimeoutMs", async () => {
+    const cfg: Config = { ...baseConfig, runTimeoutMs: 200 };
+    const client = new HangingMimoClient(cfg);
+    await expect(client.sendMessage("chat1", "hi")).rejects.toThrow(
+      /timed out after 200ms/,
+    );
+    // Process bookkeeping must be cleaned up after a timeout.
+    expect(client.abort("chat1")).toBe(false);
+  });
+
+  it("completes normally when the run finishes before runTimeoutMs", async () => {
+    const cfg: Config = { ...baseConfig, runTimeoutMs: 5000 };
+    // Fast fake run: emit a text event then exit 0 within ~50ms.
+    const client = new FakeMimoClient(
+      cfg,
+      'printf \'{"type":"text","part":{"text":"hello"}}\\n\'; exit 0',
+    );
+    const res = await client.sendMessage("chat1", "hi");
+    expect(res.content).toBe("hello");
+  });
+
+  it("disables the timeout when runTimeoutMs is 0", async () => {
+    const cfg: Config = { ...baseConfig, runTimeoutMs: 0 };
+    // Same fast fake run. With timeout disabled, the only way this resolves is
+    // the process exiting on its own — proving no wall-clock guard fired.
+    const client = new FakeMimoClient(
+      cfg,
+      'printf \'{"type":"text","part":{"text":"ok"}}\\n\'; exit 0',
+    );
+    const res = await client.sendMessage("chat1", "hi");
+    expect(res.content).toBe("ok");
+  });
+
+  it("rejects promptly even when the child ignores SIGTERM", async () => {
+    // A child that traps SIGTERM must not keep the promise pending until its
+    // own 30s sleep ends — SIGKILL (after the grace period) must end it.
+    const cfg: Config = { ...baseConfig, runTimeoutMs: 150 };
+    const client = new FakeMimoClient(
+      cfg,
+      "trap '' TERM; echo started >&2; sleep 30",
+    );
+    const t0 = Date.now();
+    await expect(client.sendMessage("chat1", "hi")).rejects.toThrow(
+      /timed out after 150ms/,
+    );
+    // Rejection must happen well before the 30s sleep would end on its own.
+    // (The 3s SIGKILL grace means up to ~3s is acceptable, never ~30s.)
+    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(client.abort("chat1")).toBe(false);
   });
 });
