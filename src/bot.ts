@@ -78,7 +78,7 @@ export function formatEventHint(event: Record<string, unknown>): string {
         (inp?.command as string) ?? (inp?.description as string) ?? "";
       const error = (state?.error as string) ?? "";
       let hint = `🔧 ${tool}: ${(title || cmd).slice(0, 80)}`;
-      if (error) hint += " ❌";
+      if (error) hint += ` ❌ ${error.slice(0, 60)}`;
       return hint;
     }
     case "step_start":

@@ -252,12 +252,23 @@ describe("formatEventBrief tool_use", () => {
 });
 
 describe("formatEventHint tool_use", () => {
-  it("appends ❌ when error present", () => {
+  it("appends ❌ + error text when error present", () => {
     const r = formatEventHint({
       type: "tool_use",
-      part: { tool: "bash", state: { error: "fail" } },
+      part: { tool: "bash", state: { error: "permission denied" } },
     });
     expect(r).toContain("❌");
+    expect(r).toContain("permission denied");
+  });
+
+  it("truncates error at 60 chars in hint mode", () => {
+    const longErr = "x".repeat(200);
+    const r = formatEventHint({
+      type: "tool_use",
+      part: { tool: "bash", state: { error: longErr } },
+    });
+    expect(r).toContain("❌");
+    expect(r.length - r.indexOf("❌")).toBeLessThan(100);
   });
 
   it("omits ❌ when no error", () => {
