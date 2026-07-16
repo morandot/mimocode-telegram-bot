@@ -63,7 +63,7 @@ function hintIcon(evType: string): string {
   }
 }
 
-function formatEventHint(event: Record<string, unknown>): string {
+export function formatEventHint(event: Record<string, unknown>): string {
   const type = event.type as string;
   const part = event.part as Record<string, unknown> | undefined;
   switch (type) {
@@ -76,7 +76,10 @@ function formatEventHint(event: Record<string, unknown>): string {
       const inp = state?.input as Record<string, unknown> | undefined;
       const cmd =
         (inp?.command as string) ?? (inp?.description as string) ?? "";
-      return `🔧 ${tool}: ${(title || cmd).slice(0, 80)}`;
+      const error = (state?.error as string) ?? "";
+      let hint = `🔧 ${tool}: ${(title || cmd).slice(0, 80)}`;
+      if (error) hint += " ❌";
+      return hint;
     }
     case "step_start":
       return "⟳ 正在处理...";
@@ -94,7 +97,7 @@ function formatEventHint(event: Record<string, unknown>): string {
   }
 }
 
-function formatEventBrief(event: Record<string, unknown>): string {
+export function formatEventBrief(event: Record<string, unknown>): string {
   const type = event.type as string;
   const part = event.part as Record<string, unknown> | undefined;
   switch (type) {
@@ -110,7 +113,10 @@ function formatEventBrief(event: Record<string, unknown>): string {
       const inp = state?.input as Record<string, unknown> | undefined;
       const cmd =
         (inp?.command as string) ?? (inp?.description as string) ?? "";
-      return `🔧 ${tool}: ${(title || cmd).slice(0, 200)}`;
+      const error = (state?.error as string) ?? "";
+      let brief = `🔧 ${tool}: ${(title || cmd).slice(0, 200)}`;
+      if (error) brief += ` ❌ ${error.slice(0, 100)}`;
+      return brief;
     }
     case "step_start":
       return "⟳ step start";
@@ -126,7 +132,7 @@ function formatEventBrief(event: Record<string, unknown>): string {
   }
 }
 
-function formatEventFull(event: Record<string, unknown>): string {
+export function formatEventFull(event: Record<string, unknown>): string {
   const type = event.type as string;
   const part = event.part as Record<string, unknown> | undefined;
   switch (type) {
@@ -139,12 +145,14 @@ function formatEventFull(event: Record<string, unknown>): string {
       const state = part?.state as Record<string, unknown> | undefined;
       const inp = state?.input as Record<string, unknown> | undefined;
       const output = (state?.output as string) ?? "";
+      const error = (state?.error as string) ?? "";
       const lines = [`🔧 ${tool}`];
       const cmd = inp?.command as string | undefined;
       const desc = inp?.description as string | undefined;
       if (cmd) lines.push(`  command: ${cmd}`);
       if (desc && desc !== cmd) lines.push(`  description: ${desc}`);
       if (output) lines.push(`  output: ${output.slice(0, 500)}`);
+      if (error) lines.push(`  ❌ error: ${error.slice(0, 500)}`);
       return lines.join("\n");
     }
     case "step_start":

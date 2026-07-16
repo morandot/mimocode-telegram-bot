@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { checkAuth, createBot, isInsideRoot, sanitizeError } from "./bot.js";
+import {
+  checkAuth,
+  createBot,
+  formatEventBrief,
+  formatEventFull,
+  formatEventHint,
+  isInsideRoot,
+  sanitizeError,
+} from "./bot.js";
 import type { Config } from "./config.js";
 
 const baseConfig: Config = {
@@ -178,6 +186,86 @@ describe("config and command gates", () => {
   it("workdirBrowseEnabled=true allows /workdir access", () => {
     const cfg = { ...baseConfig, workdirBrowseEnabled: true };
     expect(cfg.workdirBrowseEnabled).toBe(true);
+  });
+});
+
+// ── formatEvent tool_use rendering ─────────────────────
+// v0.1.5+ tool_use events carry part.state.error; users should see tool
+// failures, not just output. All three verbosity levels must surface it
+// while staying backward compatible (no error → identical to before).
+
+describe("formatEventFull tool_use", () => {
+  const okEvent = {
+    type: "tool_use",
+    part: { tool: "bash", state: { output: "done" } },
+  };
+  const errEvent = {
+    type: "tool_use",
+    part: {
+      tool: "bash",
+      state: { output: "", error: "permission denied" },
+    },
+  };
+
+  it("renders tool name and output when no error", () => {
+    const r = formatEventFull(okEvent);
+    expect(r).toContain("🔧 bash");
+    expect(r).toContain("output: done");
+    expect(r).not.toContain("❌");
+  });
+
+  it("renders error with ❌ marker when present", () => {
+    const r = formatEventFull(errEvent);
+    expect(r).toContain("❌");
+    expect(r).toContain("permission denied");
+  });
+
+  it("truncates very long errors to keep messages readable", () => {
+    const longErr = "x".repeat(1000);
+    const r = formatEventFull({
+      type: "tool_use",
+      part: { tool: "bash", state: { error: longErr } },
+    });
+    // error label prefix + truncated body, never the full 1000 chars
+    expect(r).toContain("❌");
+    expect(r.length).toBeLessThan(longErr.length);
+  });
+});
+
+describe("formatEventBrief tool_use", () => {
+  it("appends ❌ + short error when error present", () => {
+    const r = formatEventBrief({
+      type: "tool_use",
+      part: { tool: "bash", state: { error: "boom" } },
+    });
+    expect(r).toContain("❌");
+    expect(r).toContain("boom");
+  });
+
+  it("omits ❌ when no error", () => {
+    const r = formatEventBrief({
+      type: "tool_use",
+      part: { tool: "bash", state: { title: "running" } },
+    });
+    expect(r).not.toContain("❌");
+  });
+});
+
+describe("formatEventHint tool_use", () => {
+  it("appends ❌ when error present", () => {
+    const r = formatEventHint({
+      type: "tool_use",
+      part: { tool: "bash", state: { error: "fail" } },
+    });
+    expect(r).toContain("❌");
+  });
+
+  it("omits ❌ when no error", () => {
+    const r = formatEventHint({
+      type: "tool_use",
+      part: { tool: "bash", state: { title: "running" } },
+    });
+    expect(r).not.toContain("❌");
   });
 });
 
