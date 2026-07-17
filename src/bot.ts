@@ -186,9 +186,21 @@ export function shouldFallbackToDocument(chunkCount: number): boolean {
 /**
  * Build the plain-text body for the document fallback: strip Telegram HTML
  * tags from each chunk and rejoin with a blank line so paragraphs survive.
+ *
+ * Chunks come back from markdownToTelegramHtml with `escapeHtml` applied, so
+ * `<`, `>`, `&` live as `&lt;`, `&gt;`, `&amp;`. Inline messages rely on
+ * Telegram's HTML parser to render those back into characters; a .txt
+ * document bypasses that parser, so we must unescape ourselves — otherwise
+ * `if (a < b && c > d)` shows up as `if (a &lt; b &amp;&amp; c &gt; d)`.
+ * `&amp;` is decoded last so a literal `&amp;lt;` is not double-decoded.
  */
 export function prepareDocumentContent(chunks: string[]): string {
-  return chunks.map((c) => c.replace(/<[^>]+>/g, "")).join("\n\n");
+  return chunks
+    .map((c) => c.replace(/<[^>]+>/g, ""))
+    .join("\n\n")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
 }
 
 export function createBot(config: Config) {

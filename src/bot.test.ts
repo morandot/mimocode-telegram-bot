@@ -321,6 +321,27 @@ describe("prepareDocumentContent", () => {
   it("handles empty input", () => {
     expect(prepareDocumentContent([])).toBe("");
   });
+
+  it("unescapes HTML entities left by markdownToTelegramHtml", () => {
+    // .txt documents bypass Telegram's HTML parser, so escapeHtml output
+    // (&lt; &gt; &amp;) must be decoded back into real characters.
+    expect(
+      prepareDocumentContent(["if (a &lt; b &amp;&amp; c &gt; d) return x;"]),
+    ).toBe("if (a < b && c > d) return x;");
+  });
+
+  it("decodes each entity once, never double-decoding", () => {
+    // Source text was the literal string "&lt;b&gt;" (escapeHtml turned its
+    // leading & into &amp;, yielding "&amp;lt;b&amp;gt;"). Decoding once must
+    // restore the original "&lt;b&gt;" — it must NOT recurse into "<b>".
+    expect(prepareDocumentContent(["&amp;lt;b&amp;gt;"])).toBe("&lt;b&gt;");
+  });
+
+  it("strips tags and unescapes entities together", () => {
+    expect(
+      prepareDocumentContent(["<b>a &lt; b</b>", "<code>x &amp; y</code>"]),
+    ).toBe("a < b\n\nx & y");
+  });
 });
 
 describe("DOCUMENT_FALLBACK_THRESHOLD", () => {
