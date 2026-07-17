@@ -14,6 +14,37 @@ export type SendMessageOpts = {
   onEvent?: (event: Record<string, unknown>) => void;
 };
 
+/**
+ * Accumulates a byte stream and yields complete, newline-terminated lines.
+ *
+ * Process/TCP `data` events can split a single JSON line across chunks (or
+ * glue several together). `push` only returns whole lines, holding any
+ * trailing partial line back until more data arrives or `flush` is called.
+ */
+export class LineBuffer {
+  private pending = "";
+
+  /** Append a chunk; return the complete lines now available. */
+  push(chunk: string): string[] {
+    this.pending += chunk;
+    const parts = this.pending.split("\n");
+    // The last element is either "" (chunk ended on \n) or a partial line.
+    this.pending = parts.pop() ?? "";
+    const lines: string[] = [];
+    for (const line of parts) {
+      if (line) lines.push(line);
+    }
+    return lines;
+  }
+
+  /** Return any buffered partial line (no trailing newline), then clear. */
+  flush(): string {
+    const rest = this.pending;
+    this.pending = "";
+    return rest;
+  }
+}
+
 export class MimoClient {
   private workDir: string;
   private readonly mimoApiUrl?: string;
@@ -194,33 +225,41 @@ export class MimoClient {
       let fullContent = "";
       let newSessionId = sessionToUse ?? "";
 
+      const lineBuffer = new LineBuffer();
+      const handleLine = (line: string) => {
+        try {
+          const event = JSON.parse(line) as Record<string, unknown>;
+          if (opts?.onEvent) opts.onEvent(event);
+          if (event.type === "text") {
+            const part = event.part as { text?: string } | undefined;
+            if (part?.text) {
+              fullContent += part.text;
+            }
+          }
+          if (typeof event.sessionID === "string" && event.sessionID) {
+            newSessionId = event.sessionID;
+          }
+          if (typeof event.sessionId === "string" && event.sessionId) {
+            newSessionId = event.sessionId;
+          }
+        } catch {
+          // skip non-JSON lines (debug output mixed into stdout, etc.)
+        }
+      };
+
       const { stderr, code } = await this.spawnStreaming(
         args,
         chatId,
         (chunk: Buffer) => {
-          const lines = chunk.toString().split("\n").filter(Boolean);
-          for (const line of lines) {
-            try {
-              const event = JSON.parse(line) as Record<string, unknown>;
-              if (opts?.onEvent) opts.onEvent(event);
-              if (event.type === "text") {
-                const part = event.part as { text?: string } | undefined;
-                if (part?.text) {
-                  fullContent += part.text;
-                }
-              }
-              if (typeof event.sessionID === "string" && event.sessionID) {
-                newSessionId = event.sessionID;
-              }
-              if (typeof event.sessionId === "string" && event.sessionId) {
-                newSessionId = event.sessionId;
-              }
-            } catch {
-              // skip non-JSON lines
-            }
+          for (const line of lineBuffer.push(chunk.toString())) {
+            handleLine(line);
           }
         },
       );
+
+      // Flush a final event emitted without a trailing newline.
+      const tail = lineBuffer.flush();
+      if (tail) handleLine(tail);
 
       if (code !== 0 && !fullContent) {
         throw new Error(
