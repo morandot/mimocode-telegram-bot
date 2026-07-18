@@ -54,6 +54,7 @@ const cmdResult = await bot.api.setMyCommands([
   { command: "use", description: "Switch agent (build/plan/compose)" },
   { command: "compose", description: "Run compose mode workflow" },
   { command: "max", description: "Run with max parallel sampling" },
+  { command: "think", description: "Run with thinking mode enabled" },
   { command: "models", description: "List available models" },
   { command: "stats", description: "Usage statistics" },
   { command: "export", description: "Export current session" },

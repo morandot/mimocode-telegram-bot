@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import type { Config } from "./config.js";
 import { extractSessionId, LineBuffer, MimoClient } from "./mimo.js";
 
@@ -341,5 +342,69 @@ describe("MimoClient run timeout", () => {
     // (The 3s SIGKILL grace means up to ~3s is acceptable, never ~30s.)
     expect(Date.now() - t0).toBeLessThan(15_000);
     expect(client.abort("chat1")).toBe(false);
+  });
+});
+
+// ── sendMessage opts forwarding ────────────────────────
+// Verify the opts passed to sendMessage reach the spawned `mimo run` argv.
+// We can't run the real CLI in unit tests, so a subclass overrides the now-
+// protected spawnProcess to record the args and emit a fake "close" event,
+// without spawning anything.
+
+class ArgCapturingClient extends MimoClient {
+  public lastArgs: string[] | null = null;
+
+  protected override spawnProcess(args: string[]): ChildProcess {
+    this.lastArgs = args;
+    // A minimal fake ChildProcess that immediately "exits" 0 with no stdout,
+    // so sendMessage settles without touching the real mimo binary.
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = null;
+    fake.stderr = null;
+    fake.kill = () => true;
+    process.nextTick(() => fake.emit("close", 0));
+    return fake;
+  }
+}
+
+describe("MimoClient sendMessage opts forwarding", () => {
+  // Run a message through the fake client; sendMessage may resolve (empty
+  // content, code 0) or reject — we only care that the argv was captured.
+  async function runWith(
+    client: ArgCapturingClient,
+    opts?: {
+      thinking?: boolean;
+    },
+  ): Promise<string[]> {
+    try {
+      await client.sendMessage("chat1", "hello", opts);
+    } catch {
+      // expected when the fake process yields no content
+    }
+    // lastArgs is set synchronously inside spawnProcess during sendMessage.
+    return client.lastArgs ?? [];
+  }
+
+  it("includes --thinking when opts.thinking is true", async () => {
+    const client = new ArgCapturingClient(baseConfig);
+    const args = await runWith(client, { thinking: true });
+    expect(args).toContain("--thinking");
+  });
+
+  it("does NOT include --thinking when opts.thinking is false", async () => {
+    const client = new ArgCapturingClient(baseConfig);
+    const args = await runWith(client, { thinking: false });
+    expect(args).not.toContain("--thinking");
+  });
+
+  it("passes the prompt text as the run argument", async () => {
+    const client = new ArgCapturingClient(baseConfig);
+    try {
+      await client.sendMessage("chat1", "do the thing");
+    } catch {
+      // expected
+    }
+    expect(client.lastArgs?.[0]).toBe("run");
+    expect(client.lastArgs?.[1]).toBe("do the thing");
   });
 });
