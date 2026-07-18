@@ -101,6 +101,7 @@ export class MimoClient {
   private workDir: string;
   private readonly mimoApiUrl?: string;
   private readonly skipPermissions: boolean;
+  protected readonly runTimeoutMs: number;
   private sessions: Map<string, string> = new Map();
   private processes: Map<string, ChildProcess> = new Map();
   private chatModels: Map<string, string> = new Map();
@@ -111,6 +112,7 @@ export class MimoClient {
     this.workDir = config.mimoWorkDir;
     this.mimoApiUrl = config.mimoApiUrl;
     this.skipPermissions = config.skipPermissions;
+    this.runTimeoutMs = config.runTimeoutMs;
   }
 
   getWorkDir(): string {
@@ -162,7 +164,7 @@ export class MimoClient {
     return false;
   }
 
-  private spawnProcess(args: string[]): ChildProcess {
+  protected spawnProcess(args: string[]): ChildProcess {
     return spawn("mimo", args, {
       cwd: this.workDir,
       stdio: ["ignore", "pipe", "pipe"],
@@ -174,23 +176,69 @@ export class MimoClient {
     args: string[],
     chatId: string,
     onStdout: (chunk: Buffer) => void,
-    _onEvent?: (event: Record<string, unknown>) => void,
+    opts?: { timeoutMs?: number },
   ): Promise<{ stderr: string; code: number }> {
     return new Promise((resolve, reject) => {
       const proc = this.spawnProcess(args);
       this.processes.set(chatId, proc);
 
       let stderr = "";
+      let settled = false;
+      let termTimer: ReturnType<typeof setTimeout> | undefined;
+
+      // Cancel the pending timeout. The post-timeout SIGKILL grace timer is
+      // intentionally NOT cleared here: if SIGTERM fails to stop the process,
+      // the grace timer must still fire SIGKILL. It is unref'd so it never
+      // keeps the process alive on its own.
+      const cancelTimeout = () => {
+        if (termTimer) clearTimeout(termTimer);
+        termTimer = undefined;
+      };
+
+      // Wall-clock timeout. Two-stage: SIGTERM first, SIGKILL after a grace
+      // period. We reject immediately on timeout rather than waiting for the
+      // `close` event, because mimo often spawns children that inherit the
+      // stdio pipes — a grandchild holding the pipe can delay `close` long
+      // after the main process is dead.
+      const timeoutMs = opts?.timeoutMs ?? 0;
+      if (timeoutMs > 0) {
+        termTimer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          proc.kill("SIGTERM");
+          // Force-kill if the process has NOT actually exited after the grace
+          // period. Use exitCode/signalCode (null until exit) rather than
+          // proc.killed — the latter flips true as soon as the signal is sent,
+          // whether or not the child honored it, which would skip SIGKILL for
+          // a process that ignores SIGTERM.
+          const killTimer = setTimeout(() => {
+            if (proc.exitCode === null && proc.signalCode === null) {
+              proc.kill("SIGKILL");
+            }
+          }, 3000);
+          killTimer.unref?.();
+          cancelTimeout();
+          this.processes.delete(chatId);
+          reject(new Error(`mimo run timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        termTimer.unref?.();
+      }
 
       proc.stdout?.on("data", onStdout);
       proc.stderr?.on("data", (c: Buffer) => (stderr += c.toString()));
 
       proc.on("close", (code) => {
+        if (settled) return;
+        settled = true;
+        cancelTimeout();
         this.processes.delete(chatId);
         resolve({ stderr, code: code ?? -1 });
       });
 
       proc.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        cancelTimeout();
         this.processes.delete(chatId);
         reject(new Error(`Failed to spawn mimo: ${err.message}`));
       });
@@ -305,6 +353,7 @@ export class MimoClient {
             handleLine(line);
           }
         },
+        { timeoutMs: this.runTimeoutMs },
       );
 
       // Flush a final event emitted without a trailing newline.

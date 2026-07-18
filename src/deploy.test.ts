@@ -44,6 +44,7 @@ const cfg: Config = {
   workdirRoot: WORKSPACE,
   workdirBrowseEnabled: true,
   skipPermissions: false,
+  runTimeoutMs: 0,
   showText: "full",
   showReasoning: "off",
   showToolUse: "off",
