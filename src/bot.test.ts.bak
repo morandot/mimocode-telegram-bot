@@ -1,15 +1,20 @@
 import { describe, expect, it } from "bun:test";
 import {
   checkAuth,
+<<<<<<< HEAD
   createBot,
-  DOCUMENT_FALLBACK_THRESHOLD,
   formatEventBrief,
   formatEventFull,
   formatEventHint,
   isInsideRoot,
+  sanitizeError,
+=======
+  DOCUMENT_FALLBACK_THRESHOLD,
+  isInsideRoot,
   prepareDocumentContent,
   sanitizeError,
   shouldFallbackToDocument,
+>>>>>>> f96adb7 (feat: send very long responses as a document instead of message spam)
 } from "./bot.js";
 import type { Config } from "./config.js";
 
@@ -192,6 +197,7 @@ describe("config and command gates", () => {
   });
 });
 
+<<<<<<< HEAD
 // ── formatEvent tool_use rendering ─────────────────────
 // v0.1.5+ tool_use events carry part.state.error; users should see tool
 // failures, not just output. All three verbosity levels must surface it
@@ -296,9 +302,7 @@ describe("createBot command registration", () => {
     expect(bot).toBeDefined();
     // Calling bot.start is network-bound, so we stop here — registration
     // itself (including /think) is the behavior under test.
-  });
-});
-
+=======
 // ── sendLong document fallback ─────────────────────────
 // When a response is so long it would arrive as many tiny chat messages,
 // sendLong ships it as a single .txt document instead. The threshold and
@@ -359,5 +363,6 @@ describe("shouldFallbackToDocument", () => {
 
   it("never falls back for short single-chunk responses", () => {
     expect(shouldFallbackToDocument(1)).toBe(false);
+>>>>>>> f96adb7 (feat: send very long responses as a document instead of message spam)
   });
 });
