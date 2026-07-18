@@ -1,12 +1,20 @@
 import { describe, expect, it } from "bun:test";
 import {
   checkAuth,
+<<<<<<< HEAD
   createBot,
   formatEventBrief,
   formatEventFull,
   formatEventHint,
   isInsideRoot,
   sanitizeError,
+=======
+  DOCUMENT_FALLBACK_THRESHOLD,
+  isInsideRoot,
+  prepareDocumentContent,
+  sanitizeError,
+  shouldFallbackToDocument,
+>>>>>>> f96adb7 (feat: send very long responses as a document instead of message spam)
 } from "./bot.js";
 import type { Config } from "./config.js";
 
@@ -189,6 +197,7 @@ describe("config and command gates", () => {
   });
 });
 
+<<<<<<< HEAD
 // ── formatEvent tool_use rendering ─────────────────────
 // v0.1.5+ tool_use events carry part.state.error; users should see tool
 // failures, not just output. All three verbosity levels must surface it
@@ -293,5 +302,67 @@ describe("createBot command registration", () => {
     expect(bot).toBeDefined();
     // Calling bot.start is network-bound, so we stop here — registration
     // itself (including /think) is the behavior under test.
+=======
+// ── sendLong document fallback ─────────────────────────
+// When a response is so long it would arrive as many tiny chat messages,
+// sendLong ships it as a single .txt document instead. The threshold and
+// the HTML-stripping join are pure logic extracted for testing.
+
+describe("prepareDocumentContent", () => {
+  it("strips HTML tags from each chunk and joins with blank line", () => {
+    const chunks = ["<b>one</b>", "<i>two</i>"];
+    expect(prepareDocumentContent(chunks)).toBe("one\n\ntwo");
+  });
+
+  it("handles a single chunk", () => {
+    expect(prepareDocumentContent(["<code>x</code>"])).toBe("x");
+  });
+
+  it("handles empty input", () => {
+    expect(prepareDocumentContent([])).toBe("");
+  });
+
+  it("unescapes HTML entities left by markdownToTelegramHtml", () => {
+    // .txt documents bypass Telegram's HTML parser, so escapeHtml output
+    // (&lt; &gt; &amp;) must be decoded back into real characters.
+    expect(
+      prepareDocumentContent(["if (a &lt; b &amp;&amp; c &gt; d) return x;"]),
+    ).toBe("if (a < b && c > d) return x;");
+  });
+
+  it("decodes each entity once, never double-decoding", () => {
+    // Source text was the literal string "&lt;b&gt;" (escapeHtml turned its
+    // leading & into &amp;, yielding "&amp;lt;b&amp;gt;"). Decoding once must
+    // restore the original "&lt;b&gt;" — it must NOT recurse into "<b>".
+    expect(prepareDocumentContent(["&amp;lt;b&amp;gt;"])).toBe("&lt;b&gt;");
+  });
+
+  it("strips tags and unescapes entities together", () => {
+    expect(
+      prepareDocumentContent(["<b>a &lt; b</b>", "<code>x &amp; y</code>"]),
+    ).toBe("a < b\n\nx & y");
+  });
+});
+
+describe("DOCUMENT_FALLBACK_THRESHOLD", () => {
+  it("is 5 (locks the documented value)", () => {
+    expect(DOCUMENT_FALLBACK_THRESHOLD).toBe(5);
+  });
+});
+
+describe("shouldFallbackToDocument", () => {
+  it("does not fall back at the threshold (5 chunks stay inline)", () => {
+    expect(shouldFallbackToDocument(DOCUMENT_FALLBACK_THRESHOLD)).toBe(false);
+  });
+
+  it("falls back once chunk count exceeds the threshold", () => {
+    expect(shouldFallbackToDocument(DOCUMENT_FALLBACK_THRESHOLD + 1)).toBe(
+      true,
+    );
+  });
+
+  it("never falls back for short single-chunk responses", () => {
+    expect(shouldFallbackToDocument(1)).toBe(false);
+>>>>>>> f96adb7 (feat: send very long responses as a document instead of message spam)
   });
 });
