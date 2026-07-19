@@ -33,7 +33,12 @@ const mimoOk = await checkMimo.ping();
 if (mimoOk) {
   console.log("  MiMoCode CLI:  OK");
 } else {
-  console.warn("  MiMoCode CLI:  NOT FOUND (install: npm i -g @mimo-ai/cli)");
+  console.error(
+    "  MiMoCode CLI:  NOT FOUND\n" +
+      "  Install: npm i -g @mimo-ai/cli\n" +
+      "  Or set MIMO_CLI_PATH to the full path of the mimo executable",
+  );
+  process.exit(1);
 }
 
 console.log(`  Allowed users: ${config.allowedUserIds.join(", ")}`);

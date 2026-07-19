@@ -73,6 +73,7 @@ describe("isAllowed", () => {
     workdirRoot: "/tmp",
     workdirBrowseEnabled: false,
     skipPermissions: false,
+    mimoCliPath: "mimo",
     runTimeoutMs: 0,
     showText: "full",
     showReasoning: "off",

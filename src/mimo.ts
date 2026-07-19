@@ -99,6 +99,7 @@ export function extractSessionId(
 
 export class MimoClient {
   private workDir: string;
+  private readonly mimoCliPath: string;
   private readonly mimoApiUrl?: string;
   private readonly skipPermissions: boolean;
   protected readonly runTimeoutMs: number;
@@ -110,6 +111,7 @@ export class MimoClient {
 
   constructor(config: Config) {
     this.workDir = config.mimoWorkDir;
+    this.mimoCliPath = config.mimoCliPath;
     this.mimoApiUrl = config.mimoApiUrl;
     this.skipPermissions = config.skipPermissions;
     this.runTimeoutMs = config.runTimeoutMs;
@@ -165,7 +167,7 @@ export class MimoClient {
   }
 
   protected spawnProcess(args: string[]): ChildProcess {
-    return spawn("mimo", args, {
+    return spawn(this.mimoCliPath, args, {
       cwd: this.workDir,
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },

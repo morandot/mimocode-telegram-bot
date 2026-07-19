@@ -34,6 +34,13 @@ export type Config = {
   readonly mimoApiUrl?: string;
   readonly skipPermissions: boolean;
   /**
+   * Path to the `mimo` CLI executable. Defaults to `"mimo"` (relies on PATH
+   * resolution). Set an absolute path (e.g. `/usr/local/bin/mimo`) when the
+   * runtime environment does not inherit the expected PATH — common with
+   * systemd, tmux/nohup, and Bun subprocess spawns.
+   */
+  readonly mimoCliPath: string;
+  /**
    * Wall-clock timeout (ms) for a single `mimo run` invoked via sendMessage.
    * 0 disables the timeout. Default 300000 (5 min) guards against hung
    * processes (provider stalls, infinite loops) that would otherwise sit in
@@ -89,6 +96,7 @@ export function loadConfig(): Config {
     workdirBrowseEnabled: envBool("MIMO_WORKDIR_BROWSE", false),
     mimoApiUrl: process.env.MIMO_API_URL || undefined,
     skipPermissions: envBool("MIMO_SKIP_PERMISSIONS", false),
+    mimoCliPath: env("MIMO_CLI_PATH", "mimo"),
     runTimeoutMs,
     showText: envVerbosity("MIMO_SHOW_TEXT", "full"),
     showReasoning: envVerbosity("MIMO_SHOW_REASONING", "off"),

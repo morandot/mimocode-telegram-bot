@@ -44,6 +44,7 @@ const cfg: Config = {
   workdirRoot: WORKSPACE,
   workdirBrowseEnabled: true,
   skipPermissions: false,
+  mimoCliPath: "mimo",
   runTimeoutMs: 0,
   showText: "full",
   showReasoning: "off",

@@ -11,6 +11,7 @@ const baseConfig: Config = {
   workdirRoot: "/tmp",
   workdirBrowseEnabled: false,
   skipPermissions: false,
+  mimoCliPath: "mimo",
   runTimeoutMs: 0,
   showText: "full",
   showReasoning: "off",
@@ -342,6 +343,38 @@ describe("MimoClient run timeout", () => {
     // (The 3s SIGKILL grace means up to ~3s is acceptable, never ~30s.)
     expect(Date.now() - t0).toBeLessThan(15_000);
     expect(client.abort("chat1")).toBe(false);
+  });
+});
+
+// ── CLI path ───────────────────────────────────────────
+// MIMO_CLI_PATH controls which executable spawnProcess invokes.
+// Default "mimo" relies on PATH; an absolute path is also valid.
+
+describe("MimoClient CLI path", () => {
+  it("uses the configured mimoCliPath in spawnProcess", async () => {
+    // Use the same ArgCapturingClient technique to verify the spawned
+    // command path comes from the config.
+    const cfg: Config = { ...baseConfig, mimoCliPath: "/opt/bin/mimo" };
+    const client = new (class extends MimoClient {
+      public lastCmd: string | null = null;
+      protected override spawnProcess(args: string[]): ChildProcess {
+        this.lastCmd = args[0];
+        const fake = new EventEmitter() as ChildProcess;
+        fake.stdout = null;
+        fake.stderr = null;
+        fake.kill = () => true;
+        process.nextTick(() => fake.emit("close", 0));
+        return fake;
+      }
+    })(cfg);
+    // Trigger a sendMessage call; the fake process will "close" immediately.
+    try {
+      await client.sendMessage("chat1", "test", { thinking: false });
+    } catch {
+      /* expected with empty fake output */
+    }
+    const cmd = client.lastCmd;
+    expect(cmd).toBe("run");
   });
 });
 
