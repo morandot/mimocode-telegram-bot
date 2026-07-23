@@ -38,6 +38,7 @@ const eventVerbosityKey: Record<string, keyof Config> = {
   text: "showText",
   reasoning: "showReasoning",
   tool_use: "showToolUse",
+  tool_script: "showToolUse",
   step_start: "showStepStart",
   step_finish: "showStepFinish",
 };
@@ -53,6 +54,7 @@ function hintIcon(evType: string): string {
     case "reasoning":
       return "💭";
     case "tool_use":
+    case "tool_script":
       return "🔧";
     case "step_start":
       return "⟳";
@@ -81,6 +83,8 @@ export function formatEventHint(event: Record<string, unknown>): string {
       if (error) hint += ` ❌ ${error.slice(0, 60)}`;
       return hint;
     }
+    case "tool_script":
+      return "⏳ 执行脚本...";
     case "step_start":
       return "⟳ 正在处理...";
     case "step_finish": {
@@ -118,6 +122,10 @@ export function formatEventBrief(event: Record<string, unknown>): string {
       if (error) brief += ` ❌ ${error.slice(0, 100)}`;
       return brief;
     }
+    case "tool_script": {
+      const tool = (part?.tool as string) ?? "";
+      return `🔧 tool_script${tool ? `: ${tool}` : ""}`;
+    }
     case "step_start":
       return "⟳ step start";
     case "step_finish": {
@@ -154,6 +162,21 @@ export function formatEventFull(event: Record<string, unknown>): string {
       if (output) lines.push(`  output: ${output.slice(0, 500)}`);
       if (error) lines.push(`  ❌ error: ${error.slice(0, 500)}`);
       return lines.join("\n");
+    }
+    case "tool_script": {
+      const tasks = part?.tasks as
+        | Array<{ tool?: string; command?: string; description?: string }>
+        | undefined;
+      if (tasks && tasks.length > 0) {
+        const lines = [`📋 编排 ${tasks.length} 个工具`];
+        for (const t of tasks) {
+          const label = t.command ?? t.description ?? "";
+          lines.push(`  ${t.tool ?? "?"}${label ? `: ${label}` : ""}`);
+        }
+        return lines.join("\n");
+      }
+      const tool = (part?.tool as string) ?? "";
+      return `📋 tool_script${tool ? `: ${tool}` : ""}`;
     }
     case "step_start":
       return "⟳ step start";

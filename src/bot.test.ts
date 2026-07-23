@@ -284,6 +284,67 @@ describe("formatEventHint tool_use", () => {
   });
 });
 
+// ── formatEvent tool_script rendering (v0.1.7) ───────
+// MiMoCode v0.1.7 introduces tool_script events (multi-tool orchestration
+// in QuickJS sandbox). The bot should surface them at all verbosity levels
+// rather than silently dropping them.
+// https://github.com/XiaomiMiMo/MiMo-Code/releases/tag/v0.1.7
+
+describe("formatEventHint tool_script", () => {
+  it("shows a generic hint for tool_script events", () => {
+    const r = formatEventHint({ type: "tool_script" });
+    expect(r).toContain("⏳");
+    expect(r).toContain("脚本");
+  });
+});
+
+describe("formatEventBrief tool_script", () => {
+  it("shows the tool_script type", () => {
+    const r = formatEventBrief({
+      type: "tool_script",
+      part: { tool: "bash" },
+    });
+    expect(r).toContain("tool_script");
+    expect(r).toContain("bash");
+  });
+
+  it("renders without part", () => {
+    const r = formatEventBrief({ type: "tool_script" });
+    expect(r).toContain("tool_script");
+  });
+});
+
+describe("formatEventFull tool_script", () => {
+  it("shows task count and tool list when part has tasks", () => {
+    const r = formatEventFull({
+      type: "tool_script",
+      part: {
+        tasks: [
+          { tool: "bash", command: "ls" },
+          { tool: "edit", description: "fix bug" },
+        ],
+      },
+    });
+    expect(r).toContain("📋");
+    expect(r).toContain("2 个工具");
+    expect(r).toContain("bash: ls");
+    expect(r).toContain("edit: fix bug");
+  });
+
+  it("shows a simple label when part has no tasks", () => {
+    const r = formatEventFull({
+      type: "tool_script",
+      part: { tool: "bash" },
+    });
+    expect(r).toContain("📋 tool_script: bash");
+  });
+
+  it("renders without part at all", () => {
+    const r = formatEventFull({ type: "tool_script" });
+    expect(r).toContain("📋 tool_script");
+  });
+});
+
 // ── createBot registers commands (smoke test) ──────────
 // Constructing the bot must register every command handler, including the
 // newer /think, without throwing. grammy stores handlers in memory; no
