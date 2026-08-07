@@ -44,6 +44,7 @@ const cfg: Config = {
   workdirRoot: WORKSPACE,
   workdirBrowseEnabled: true,
   skipPermissions: false,
+  servePort: 4096,
   mimoCliPath: "mimo",
   runTimeoutMs: 0,
   showText: "full",

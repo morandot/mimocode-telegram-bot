@@ -31,8 +31,21 @@ export type Config = {
   readonly mimoWorkDir: string;
   readonly workdirRoot: string;
   readonly workdirBrowseEnabled: boolean;
+  /**
+   * URL of an already-running `mimo serve`. When set, the bot connects to it
+   * instead of spawning its own server.
+   */
   readonly mimoApiUrl?: string;
+  /**
+   * When skipPermissions is true every permission request is auto-approved
+   * (reply "once"), mirroring --dangerously-skip-permissions. When false the
+   * bot asks the user for approval via inline buttons.
+   */
   readonly skipPermissions: boolean;
+  /**
+   * Port for the bot-managed `mimo serve`. Ignored when MIMO_API_URL is set.
+   */
+  readonly servePort: number;
   /**
    * Path to the `mimo` CLI executable. Defaults to `"mimo"` (relies on PATH
    * resolution). Set an absolute path (e.g. `/usr/local/bin/mimo`) when the
@@ -41,10 +54,10 @@ export type Config = {
    */
   readonly mimoCliPath: string;
   /**
-   * Wall-clock timeout (ms) for a single `mimo run` invoked via sendMessage.
-   * 0 disables the timeout. Default 300000 (5 min) guards against hung
-   * processes (provider stalls, infinite loops) that would otherwise sit in
-   * memory until the user manually /cancel's.
+   * Wall-clock timeout (ms) for a single message exchange. 0 disables the
+   * timeout. Default 300000 (5 min) guards against hung runs (provider
+   * stalls, infinite loops) that would otherwise sit until the user manually
+   * /cancel's.
    */
   readonly runTimeoutMs: number;
   readonly showText: Verbosity;
@@ -85,6 +98,23 @@ export function loadConfig(): Config {
     );
   }
 
+  const servePortRaw = process.env.MIMO_SERVE_PORT;
+  const servePortTrimmed = servePortRaw?.trim();
+  const servePort =
+    servePortTrimmed === undefined || servePortTrimmed === ""
+      ? 4096
+      : Number(servePortTrimmed);
+  if (
+    !Number.isInteger(servePort) ||
+    servePort < 1 ||
+    servePort > 65535 ||
+    Number.isNaN(servePort)
+  ) {
+    throw new Error(
+      `MIMO_SERVE_PORT must be an integer between 1 and 65535 (got "${servePortRaw}").`,
+    );
+  }
+
   return {
     telegramToken: env("TELEGRAM_BOT_TOKEN"),
     allowedUserIds,
@@ -96,6 +126,7 @@ export function loadConfig(): Config {
     workdirBrowseEnabled: envBool("MIMO_WORKDIR_BROWSE", false),
     mimoApiUrl: process.env.MIMO_API_URL || undefined,
     skipPermissions: envBool("MIMO_SKIP_PERMISSIONS", false),
+    servePort,
     mimoCliPath: env("MIMO_CLI_PATH", "mimo"),
     runTimeoutMs,
     showText: envVerbosity("MIMO_SHOW_TEXT", "full"),

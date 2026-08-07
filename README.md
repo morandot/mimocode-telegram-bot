@@ -2,16 +2,29 @@
 
 Telegram bot client for [MiMoCode](https://mimo.xiaomi.com/mimocode) — control your AI coding agent from your phone.
 
+## How It Works
+
+The bot spawns a local `mimo serve` (or connects to an existing one via `MIMO_API_URL`) and talks to it over HTTP + SSE:
+
+- Every chat message becomes a session prompt; results stream back as events and are formatted for Telegram.
+- **Permission requests arrive as inline buttons** (✅ allow once / ⚡ always allow / ❌ reject) unless `MIMO_SKIP_PERMISSIONS=true`.
+- Sessions persist server-side (SQLite), so they survive bot and server restarts.
+
 ## Security
 
-This bot lets whitelisted Telegram users drive a coding agent on your host. You **MUST** set `TELEGRAM_ALLOWED_USER_ID` — the bot refuses to start without it. Keep `MIMO_SKIP_PERMISSIONS=false` unless the host is disposable. Never share your bot token.
+This bot lets whitelisted Telegram users drive a coding agent on your host. You **MUST** set `TELEGRAM_ALLOWED_USER_ID` — the bot refuses to start without it.
+
+- `MIMO_SKIP_PERMISSIONS=false` (default): every permission request is sent to Telegram for approval.
+- `MIMO_SKIP_PERMISSIONS=true`: all requests auto-approved (like `--dangerously-skip-permissions`). Only use on a disposable/trusted host.
+
+Never share your bot token. The bot binds `mimo serve` to loopback only; set `MIMOCODE_SERVER_PASSWORD` if you bind it elsewhere.
 
 ## Quick Start
 
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) >= 18 or [Bun](https://bun.sh/)
-- [MiMoCode](https://mimo.xiaomi.com/mimocode/install) installed (`npm install -g @mimo-ai/cli`)
+- [MiMoCode](https://mimo.xiaomi.com/mimocode/install) installed (`npm install -g @mimo-ai/cli`, v0.1.7+)
 - A Telegram Bot Token (get from [@BotFather](https://t.me/BotFather))
 
 ### 1. Get Your Telegram Bot Token
@@ -38,6 +51,8 @@ cp .env.example .env
 bun run start
 ```
 
+The bot starts `mimo serve` automatically on startup (default port 4096) and shuts it down on exit.
+
 ### 4. Configuration
 
 Create a `.env` file:
@@ -49,13 +64,10 @@ TELEGRAM_ALLOWED_USER_ID=123456789
 
 # Optional
 MIMO_WORK_DIR=/path/to/your/project
-MIMO_WORKDIR_ROOT=/path/to/your/project
-MIMO_WORKDIR_BROWSE=false
-MIMO_API_URL=http://127.0.0.1:4096
-MIMO_SKIP_PERMISSIONS=false
+MIMO_SERVE_PORT=4096
+MIMO_API_URL=http://127.0.0.1:4096   # connect to an existing server instead
+MIMO_SKIP_PERMISSIONS=false          # true → auto-approve everything (dangerous)
 ```
-
-> `MIMO_SKIP_PERMISSIONS` accepts `true` or `1` to enable.
 
 ### 5. Start Chatting
 
@@ -74,28 +86,38 @@ You: Fix the bug in src/utils.ts line 42
 Bot: [analyzes and fixes the bug]
 ```
 
-### Switch Modes
+### Permission Approvals
+
+When the agent needs to run a command or write a file, the bot asks right in the chat:
 
 ```
-/use plan      # Read-only analysis
-/use compose   # Full workflow: plan → code → test → review
+🔐 权限请求: bash (npm install)
+[✅ 允许一次] [⚡ 总是允许] [❌ 拒绝]
+```
+
+### Switch Agents
+
+```
+/use            # List agents
+/use plan       # Read-only analysis
+/use compose    # Full workflow: plan → code → test → review
 /compose Build a REST API with auth
 ```
 
 ### Switch Model
 
 ```
-/model                         # List models and current selection
-/model xiaomi/mimo-v2.5-pro    # Switch model
+/model                          # Show current model
+/model xiaomi/mimo-v2.5-pro     # Switch model
 ```
 
 ### Session Management
 
 ```
 /new          # Start fresh session
-/sessions     # List all sessions
+/sessions     # List all sessions (reply a number to switch)
 /delete       # Delete current session
-/export       # Export as JSON file
+/cancel       # Stop the running task
 ```
 
 ## Commands
@@ -106,17 +128,14 @@ Bot: [analyzes and fixes the bug]
 | `/help` | Show all commands |
 | `/new` | Start a new session |
 | `/cancel` | Stop running task |
-| `/workdir` | Browse and change workspace directory |
+| `/workdir` | Browse and change workspace directory (restarts the server) |
 | `/status` | Connection & session info |
 | `/sessions` | List all sessions (reply number to switch) |
 | `/model` | Switch model |
 | `/use` | Switch agent (build/plan/compose) |
 | `/compose` | Run compose mode workflow |
 | `/max` | Run with max parallel sampling |
-| `/models` | List available models |
-| `/stats` | Usage statistics |
-| `/export` | Export current session |
-| `/providers` | List AI providers |
+| `/think` | Run with thinking mode enabled |
 | `/delete` | Delete a session |
 | `/version` | MimoCode version |
 
@@ -124,9 +143,11 @@ Bot: [analyzes and fixes the bug]
 
 ```bash
 bun install
-bun run dev        # Dev with hot reload
-bun run typecheck  # Type check
-bun run build      # Build for production
+bun run lint        # Biome check
+bun run typecheck   # Type check
+bun test            # Unit tests (fake server)
+bun tests/integration.ts   # Integration vs a real mimo serve
+bun run build       # Build for production
 ```
 
 ## License

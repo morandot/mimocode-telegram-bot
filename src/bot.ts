@@ -1,14 +1,16 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Bot, type Context, InlineKeyboard, InputFile } from "grammy";
 import { type Config, isAllowed, type Verbosity } from "./config.js";
+import { escapeHtml, formatLong, stripSystemTags } from "./format.js";
 import {
-  formatLong,
-  parseJsonSafe,
-  stripSystemTags,
-  wrapCode,
-} from "./format.js";
-import { MimoClient, type SendMessageOpts } from "./mimo.js";
+  MimoClient,
+  MimoServer,
+  type PermissionRequest,
+  type SendMessageOpts,
+  SessionNotFoundError,
+} from "./mimo.js";
 
 export function checkAuth(
   ctx: { from?: { id: number } },
@@ -226,9 +228,13 @@ export function prepareDocumentContent(chunks: string[]): string {
     .replace(/&amp;/g, "&");
 }
 
-export function createBot(config: Config) {
+export function createBot(
+  config: Config,
+  deps?: { server?: MimoServer; client?: MimoClient },
+) {
+  const server = deps?.server ?? new MimoServer(config);
+  const mimo = deps?.client ?? new MimoClient(config, server);
   const bot = new Bot(config.telegramToken);
-  const mimo = new MimoClient(config);
   const processing = new Set<string>();
   const lastSessions = new Map<
     string,
@@ -243,6 +249,56 @@ export function createBot(config: Config) {
   }
   const waitingForFolderName = new Map<string, WaitEntry>();
   const pendingFolderName = new Map<string, string>();
+
+  // ── Interactive permission approval ──────────────────
+  // Telegram callback_data is limited to 64 bytes, so pending permission
+  // request ids are mapped to short tokens. Entries live in memory; a bot
+  // restart drops them (the server eventually times out unanswered asks).
+  const permissionTokens = new Map<string, { requestId: string; ts: number }>();
+
+  function sendPermissionPrompt(request: PermissionRequest) {
+    const chatId = mimo.getChatIdForSession(request.sessionId);
+    if (!chatId) {
+      // No chat is tracking this session; fall back to rejecting so the run
+      // never hangs on an unanswerable prompt.
+      mimo.replyPermission(request.requestId, "reject").catch(() => {});
+      return;
+    }
+    // CSPRNG token (callback_data is limited to 64 bytes).
+    const token = randomBytes(6).toString("base64url");
+    permissionTokens.set(token, {
+      requestId: request.requestId,
+      ts: Date.now(),
+    });
+    const kb = new InlineKeyboard()
+      .text("✅ 允许一次", `perm:${token}:once`)
+      .text("⚡ 总是允许", `perm:${token}:always`)
+      .row()
+      .text("❌ 拒绝", `perm:${token}:reject`);
+    const patternText = escapeHtml(request.patterns.join(", ") || "*");
+    const permissionText = escapeHtml(request.permission);
+    bot.api
+      .sendMessage(
+        chatId,
+        `🔐 权限请求: <code>${permissionText}</code> (<code>${patternText}</code>)`,
+        {
+          parse_mode: "HTML",
+          reply_markup: kb,
+        },
+      )
+      .catch(() => {});
+  }
+
+  // Sweep stale permission tokens (10 min TTL) every now and then.
+  const permissionSweeper = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of permissionTokens) {
+      if (now - entry.ts > 10 * 60_000) permissionTokens.delete(key);
+    }
+  }, 60_000);
+  permissionSweeper.unref?.();
+
+  mimo.onPermissionRequest = sendPermissionPrompt;
 
   async function sendLong(chatId: string, text: string) {
     const chunks = formatLong(text);
@@ -301,7 +357,13 @@ export function createBot(config: Config) {
       const onEvent = (event: Record<string, unknown>) => {
         const evType = event.type as string | undefined;
         if (!evType) return;
-        const v = getVerbosity(evType, config);
+        let v = getVerbosity(evType, config);
+        // /think forces reasoning visibility for this run regardless of the
+        // MIMO_SHOW_REASONING default (the serve protocol always delivers
+        // reasoning parts; the CLI --thinking flag no longer applies).
+        if (evType === "reasoning" && opts.mimoOpts?.thinking && v === "off") {
+          v = "full";
+        }
         if (v === "off") return;
         if (evType === "text") {
           if (v === "brief") {
@@ -461,9 +523,7 @@ export function createBot(config: Config) {
       .text("Status", "/status")
       .text("Sessions", "/sessions")
       .row()
-      .text("Models", "/models")
-      .text("Stats", "/stats")
-      .row()
+      .text("Model", "/model")
       .text("New Session", "/new");
   }
 
@@ -494,7 +554,6 @@ export function createBot(config: Config) {
         `/new — Start new session\n` +
         `/cancel — Stop running task\n` +
         `/sessions — List sessions (reply number to switch)\n` +
-        `/export — Export session as JSON\n` +
         `/delete — Delete a session\n\n` +
         `<b>Modes</b>\n` +
         `/use — Switch agent (build/plan/compose)\n` +
@@ -503,11 +562,9 @@ export function createBot(config: Config) {
         `/think — Run with thinking mode\n\n` +
         `<b>Info</b>\n` +
         `/model — Switch model\n` +
-        `/models — List models\n` +
         `/status — Connection info\n` +
-        `/stats — Usage stats\n` +
-        `/providers — List providers\n` +
-        `/version — Version info`,
+        `/version — Version info\n\n` +
+        `🔐 Permission requests appear as inline buttons — approve or reject them right here.`,
       { parse_mode: "HTML", reply_markup: mainMenuKb() },
     );
   });
@@ -526,12 +583,17 @@ export function createBot(config: Config) {
 
     const oldSession = mimo.getSessionId(chatId);
     if (oldSession) {
-      const r = await mimo.exec(["session", "delete", oldSession]);
-      if (r.code !== 0) {
-        await ctx.reply(
-          `Failed to clear old session: ${sanitizeError(r.stderr)}`,
-        );
-        return;
+      try {
+        await mimo.deleteSession(oldSession);
+      } catch (err) {
+        // An already-deleted (stale) session is not an error — just clear
+        // local state and continue.
+        if (!(err instanceof SessionNotFoundError)) {
+          await ctx.reply(
+            `Failed to clear old session: ${sanitizeError(err instanceof Error ? err.message : String(err))}`,
+          );
+          return;
+        }
       }
     }
     mimo.clearSession(chatId);
@@ -545,23 +607,21 @@ export function createBot(config: Config) {
 
     const [version, sessionList] = await Promise.all([
       mimo.getVersion(),
-      mimo.exec(["session", "list", "--format", "json"]),
+      mimo.listSessions(),
     ]);
 
-    const sessions = parseJsonSafe<
-      Array<{ id: string; title: string; updated: number }>
-    >(sessionList.stdout, []);
-
     const currentSession = mimo.getSessionId(chatId);
-    const current = sessions.find((s) => s.id === currentSession);
+    const current = sessionList.find((s) => s.id === currentSession);
     const model = mimo.getModel(chatId);
     const agent = mimo.getAgent(chatId) ?? "build";
 
     const lines = [
       `<b>Status</b>`,
       ``,
+      `Server: <code>${server.url}</code>`,
       `Version: ${version}`,
-      `Sessions: ${sessions.length}`,
+      `Permissions: ${config.skipPermissions ? "auto-approve" : "interactive buttons"}`,
+      `Sessions: ${sessionList.length}`,
       `Model: <code>${model ?? "default"}</code>`,
       `Agent: <code>${agent}</code>`,
     ];
@@ -587,14 +647,7 @@ export function createBot(config: Config) {
     if (!checkAuth(ctx, config)) return;
     const chatId = String(ctx.chat.id);
 
-    const r = await mimo.exec(["session", "list", "--format", "json"]);
-    const sessions = parseJsonSafe<
-      Array<{
-        id: string;
-        title: string;
-        updated: number;
-      }>
-    >(r.stdout, []);
+    const sessions = await mimo.listSessions();
 
     if (sessions.length === 0) {
       await ctx.reply("No sessions found.");
@@ -649,17 +702,10 @@ export function createBot(config: Config) {
 
     if (!target) {
       const current = mimo.getModel(chatId);
-      const r = await mimo.exec(["models"], { timeoutMs: 10_000 });
-      const models = r.stdout
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
-      const lines = [
-        `<b>Model</b>: <code>${current ?? "default"}</code>\n`,
-        models.map((m) => `• <code>${m}</code>`).join("\n"),
-        `\nUsage: /model &lt;provider/model&gt;`,
-      ];
-      await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+      await ctx.reply(
+        `<b>Model</b>: <code>${current ?? "default"}</code>\n\nUsage: /model &lt;provider/model&gt;`,
+        { parse_mode: "HTML" },
+      );
       return;
     }
 
@@ -675,20 +721,24 @@ export function createBot(config: Config) {
 
     if (!target) {
       const current = mimo.getAgent(chatId) ?? "build";
-      const lines = [
-        `<b>Agent</b>: <code>${current}</code>\n`,
-        `• <code>build</code> — Default execution`,
-        `• <code>plan</code> — Read-only analysis`,
-        `• <code>compose</code> — Full workflow`,
-        `\nUsage: /use &lt;agent&gt;`,
-      ];
-      await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
-      return;
-    }
-
-    const validAgents = ["build", "plan", "compose"];
-    if (!validAgents.includes(target)) {
-      await ctx.reply(`Choose from: ${validAgents.join(", ")}`);
+      let agents: string[] = [];
+      try {
+        agents = await mimo.listAgents();
+      } catch (err) {
+        console.warn(
+          `[bot] failed to list agents: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+      const list =
+        agents.length > 0
+          ? agents.map((a) => `• <code>${a}</code>`).join("\n")
+          : `• <code>build</code>\n• <code>plan</code>\n• <code>compose</code>`;
+      await ctx.reply(
+        `<b>Agent</b>: <code>${current}</code>\n\n${list}\n\nUsage: /use &lt;agent&gt;`,
+        {
+          parse_mode: "HTML",
+        },
+      );
       return;
     }
 
@@ -728,16 +778,15 @@ export function createBot(config: Config) {
   });
 
   // ── /think ───────────────────────────────────────────
-  // Like a plain chat, but enables extended reasoning (--thinking) for the
-  // single run. The --thinking flag is already wired into sendMessage; this
-  // just exposes it as a Telegram command.
+  // Forces reasoning visibility for this run regardless of MIMO_SHOW_REASONING
+  // (the serve protocol always delivers reasoning parts).
   bot.command("think", async (ctx) => {
     if (!checkAuth(ctx, config)) return;
     const text = ctx.match?.trim();
     if (!text) {
       await ctx.reply(
         `Usage: /think &lt;your question&gt;\n\n` +
-          `Runs with thinking mode enabled for extended reasoning.`,
+          `Runs with reasoning content shown (overrides MIMO_SHOW_REASONING for this run).`,
       );
       return;
     }
@@ -747,110 +796,38 @@ export function createBot(config: Config) {
     });
   });
 
-  // ── /models ──────────────────────────────────────────
-  bot.command("models", async (ctx) => {
-    if (!checkAuth(ctx, config)) return;
-
-    const r = await mimo.exec(["models"], { timeoutMs: 10_000 });
-    const models = r.stdout
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean);
-
-    if (models.length === 0) {
-      await ctx.reply("No models found.");
-      return;
-    }
-
-    const lines = [
-      `<b>Models</b> (${models.length})\n`,
-      models.map((m) => `• <code>${m}</code>`).join("\n"),
-    ];
-
-    await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
-  });
-
-  // ── /stats ───────────────────────────────────────────
-  bot.command("stats", async (ctx) => {
-    if (!checkAuth(ctx, config)) return;
-
-    const r = await mimo.exec(["stats"], { timeoutMs: 10_000 });
-    const output = r.stdout.trim();
-    if (!output) {
-      await ctx.reply("No stats available.");
-      return;
-    }
-    await ctx.reply(wrapCode(output), { parse_mode: "HTML" });
-  });
-
-  // ── /export ──────────────────────────────────────────
-  bot.command("export", async (ctx) => {
-    if (!checkAuth(ctx, config)) return;
-    const chatId = String(ctx.chat.id);
-
-    const sessionId = mimo.getSessionId(chatId);
-    if (!sessionId) {
-      await ctx.reply("No active session to export.");
-      return;
-    }
-
-    const r = await mimo.exec(["export", sessionId], { timeoutMs: 15_000 });
-    if (r.code !== 0) {
-      await ctx.reply(`Export failed: ${sanitizeError(r.stderr)}`);
-      return;
-    }
-
-    const data = Buffer.from(r.stdout, "utf-8");
-    const file = new InputFile(data, `session-${sessionId.slice(0, 16)}.json`);
-    await ctx.replyWithDocument(file).catch(async () => {
-      await ctx.reply(r.stdout.slice(0, 4000));
-    });
-  });
-
-  // ── /providers ───────────────────────────────────────
-  bot.command("providers", async (ctx) => {
-    if (!checkAuth(ctx, config)) return;
-
-    const r = await mimo.exec(["providers", "list"], { timeoutMs: 10_000 });
-    const output = r.stdout.trim();
-    if (!output) {
-      await ctx.reply("No providers configured.");
-      return;
-    }
-    await ctx.reply(wrapCode(output), { parse_mode: "HTML" });
-  });
-
   // ── /delete ──────────────────────────────────────────
   bot.command("delete", async (ctx) => {
     if (!checkAuth(ctx, config)) return;
     const chatId = String(ctx.chat.id);
 
     const sessionId = ctx.match?.trim();
-    if (!sessionId) {
-      const current = mimo.getSessionId(chatId);
-      if (!current) {
-        await ctx.reply("No active session to delete.");
-        return;
-      }
-      const r = await mimo.exec(["session", "delete", current]);
-      if (r.code === 0) {
-        mimo.clearSession(chatId);
-        await ctx.reply("Session deleted.");
-      } else {
-        await ctx.reply(`Delete failed: ${sanitizeError(r.stderr)}`);
-      }
+    const target = sessionId ?? mimo.getSessionId(chatId);
+    if (!target) {
+      await ctx.reply("No active session to delete.");
       return;
     }
 
-    const r = await mimo.exec(["session", "delete", sessionId]);
-    if (r.code === 0) {
-      if (mimo.getSessionId(chatId) === sessionId) {
-        mimo.clearSession(chatId);
+    try {
+      await mimo.deleteSession(target);
+    } catch (err) {
+      if (err instanceof SessionNotFoundError) {
+        // The session is already gone — treat as deleted.
+        if (mimo.getSessionId(chatId) === target) {
+          mimo.clearSession(chatId);
+        }
+        await ctx.reply("Session deleted.");
+        return;
       }
-      await ctx.reply("Session deleted.");
-    } else {
-      await ctx.reply(`Delete failed: ${sanitizeError(r.stderr)}`);
+      await ctx.reply(
+        `Delete failed: ${sanitizeError(err instanceof Error ? err.message : String(err))}`,
+      );
+      return;
     }
+    if (mimo.getSessionId(chatId) === target) {
+      mimo.clearSession(chatId);
+    }
+    await ctx.reply("Session deleted.");
   });
 
   // ── /cancel, /stop ──────────────────────────────────
@@ -861,7 +838,8 @@ export function createBot(config: Config) {
     const hadWaitEntry = waitingForFolderName.has(chatId);
     waitingForFolderName.delete(chatId);
     pendingFolderName.delete(chatId);
-    if (mimo.abort(chatId)) {
+    const aborted = await mimo.abort(chatId);
+    if (aborted) {
       processing.delete(chatId);
       const parts = ["Task cancelled."];
       if (hadWaitEntry) parts.push("Folder creation also cancelled.");
@@ -968,6 +946,41 @@ export function createBot(config: Config) {
 
     const chatId = String(ctx.chat?.id);
     const data = ctx.callbackQuery.data;
+
+    if (data.startsWith("perm:")) {
+      const [, token, choice] = data.split(":");
+      const entry = token ? permissionTokens.get(token) : undefined;
+      if (!entry || !choice || !["once", "always", "reject"].includes(choice)) {
+        await ctx.answerCallbackQuery({
+          text: "Permission prompt expired or invalid.",
+          show_alert: true,
+        });
+        return;
+      }
+      permissionTokens.delete(token);
+      try {
+        await mimo.replyPermission(
+          entry.requestId,
+          choice as "once" | "always" | "reject",
+        );
+        await ctx.answerCallbackQuery({
+          text:
+            choice === "reject"
+              ? "Permission rejected."
+              : choice === "always"
+                ? "Permission approved (always)."
+                : "Permission approved (once).",
+        });
+      } catch (err) {
+        // Keep the button alive so the user can retry after a network blip.
+        permissionTokens.set(token, entry);
+        await ctx.answerCallbackQuery({
+          text: `Reply failed: ${(err as Error).message.slice(0, 100)}`,
+          show_alert: true,
+        });
+      }
+      return;
+    }
 
     if (data.startsWith("wd:")) {
       const parts = data.split(":");
@@ -1118,8 +1131,9 @@ export function createBot(config: Config) {
       }
 
       if (action === "sel") {
-        await ctx.answerCallbackQuery();
-        // F2: guard setWorkDir to stay inside workspace root
+        // F2: guard setWorkDir to stay inside workspace root. The callback is
+        // answered exactly once — failure paths use reply() so the alert is
+        // not swallowed by a second answerCallbackQuery.
         if (!isInsideRoot(current, config.workdirRoot)) {
           await ctx.answerCallbackQuery({
             text: "Cannot select a directory outside the workspace root.",
@@ -1127,7 +1141,19 @@ export function createBot(config: Config) {
           });
           return;
         }
-        mimo.setWorkDir(current);
+        try {
+          await mimo.setWorkDir(current);
+        } catch (err) {
+          await ctx.answerCallbackQuery({
+            text: "Directory switch failed.",
+            show_alert: true,
+          });
+          await ctx.reply(
+            `Failed to switch directory: ${(err as Error).message}`,
+          );
+          return;
+        }
+        await ctx.answerCallbackQuery();
         browsingPaths.delete(chatId);
         browsingSubdirs.delete(chatId);
 
@@ -1189,5 +1215,5 @@ export function createBot(config: Config) {
     console.error("Bot error:", err);
   });
 
-  return bot;
+  return { bot, client: mimo, server };
 }

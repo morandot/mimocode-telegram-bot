@@ -73,6 +73,7 @@ describe("isAllowed", () => {
     workdirRoot: "/tmp",
     workdirBrowseEnabled: false,
     skipPermissions: false,
+    servePort: 4096,
     mimoCliPath: "mimo",
     runTimeoutMs: 0,
     showText: "full",
@@ -176,6 +177,36 @@ describe("loadConfig", () => {
     delete process.env.MIMO_RUN_TIMEOUT_MS;
     const config = loadConfig();
     expect(config.runTimeoutMs).toBe(300_000);
+  });
+
+  it("defaults servePort to 4096", () => {
+    delete process.env.MIMO_SERVE_PORT;
+    const config = loadConfig();
+    expect(config.servePort).toBe(4096);
+  });
+
+  it("parses MIMO_SERVE_PORT", () => {
+    process.env.MIMO_SERVE_PORT = "8080";
+    const config = loadConfig();
+    expect(config.servePort).toBe(8080);
+  });
+
+  it("treats whitespace-only MIMO_SERVE_PORT as unset (default)", () => {
+    process.env.MIMO_SERVE_PORT = "   ";
+    const config = loadConfig();
+    expect(config.servePort).toBe(4096);
+  });
+
+  it("rejects non-numeric MIMO_SERVE_PORT", () => {
+    process.env.MIMO_SERVE_PORT = "abc";
+    expect(() => loadConfig()).toThrow("MIMO_SERVE_PORT");
+  });
+
+  it("rejects out-of-range MIMO_SERVE_PORT", () => {
+    process.env.MIMO_SERVE_PORT = "70000";
+    expect(() => loadConfig()).toThrow("MIMO_SERVE_PORT");
+    process.env.MIMO_SERVE_PORT = "0";
+    expect(() => loadConfig()).toThrow("MIMO_SERVE_PORT");
   });
 
   it("parses MIMO_RUN_TIMEOUT_MS as milliseconds", () => {

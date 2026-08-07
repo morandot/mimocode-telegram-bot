@@ -2,7 +2,6 @@ import { copyFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { createBot } from "./bot.js";
 import { loadConfig } from "./config.js";
-import { MimoClient } from "./mimo.js";
 
 const root = resolve(import.meta.dirname ?? process.cwd(), "..");
 
@@ -15,7 +14,7 @@ if (!existsSync(resolve(root, ".env"))) {
 }
 
 const config = loadConfig();
-const bot = createBot(config);
+const { bot, client, server } = createBot(config);
 
 console.log(`
   ██╗  ██╗██╗███╗   ██╗ ██████╗ ██████╗ ███████╗██████╗
@@ -26,24 +25,33 @@ console.log(`
   ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═════╝
 `);
 
-// Check if mimo CLI is available
-const checkMimo = new MimoClient(config);
-const mimoOk = await checkMimo.ping();
-
-if (mimoOk) {
-  console.log("  MiMoCode CLI:  OK");
-} else {
+// Start (or connect to) the mimo serve process.
+console.log(
+  `  Server:    ${server.url}${server.isManaged ? " (managed)" : " (external)"}`,
+);
+try {
+  await server.start();
+} catch (err) {
   console.error(
-    "  MiMoCode CLI:  NOT FOUND\n" +
-      "  Install: npm i -g @mimo-ai/cli\n" +
-      "  Or set MIMO_CLI_PATH to the full path of the mimo executable",
+    `  MiMoCode server: FAILED — ${err instanceof Error ? err.message : err}\n` +
+      `  Install: npm i -g @mimo-ai/cli\n` +
+      `  Or set MIMO_CLI_PATH to the full path of the mimo executable\n` +
+      `  Or set MIMO_API_URL to an already-running mimo serve instance`,
   );
   process.exit(1);
 }
 
+const version = await client.getVersion();
+console.log(`  MiMoCode:  ${version || "OK"}`);
+
+// Open the SSE event stream (reconnects automatically).
+client.startEvents().catch((err) => {
+  console.error(`  Event stream: FAILED — ${err.message}`);
+});
+
 console.log(`  Allowed users: ${config.allowedUserIds.join(", ")}`);
 console.log(
-  `  Skip permissions: ${config.skipPermissions ? "YES (dangerous)" : "no"}`,
+  `  Permissions: ${config.skipPermissions ? "auto-approve (dangerous)" : "interactive buttons"}`,
 );
 
 console.log("\n  Registering bot commands...");
@@ -59,11 +67,7 @@ const cmdResult = await bot.api.setMyCommands([
   { command: "use", description: "Switch agent (build/plan/compose)" },
   { command: "compose", description: "Run compose mode workflow" },
   { command: "max", description: "Run with max parallel sampling" },
-  { command: "think", description: "Run with thinking mode enabled" },
-  { command: "models", description: "List available models" },
-  { command: "stats", description: "Usage statistics" },
-  { command: "export", description: "Export current session" },
-  { command: "providers", description: "List AI providers" },
+  { command: "think", description: "Run with reasoning shown" },
   { command: "delete", description: "Delete a session" },
   { command: "version", description: "MimoCode version" },
 ]);
@@ -72,12 +76,13 @@ console.log(`  Commands registered: ${cmdResult ? "OK" : "FAILED"}`);
 console.log("\n  Bot started. Send /start in Telegram.\n");
 
 const stop = bot.start();
-process.on("SIGTERM", () => {
+const shutdown = async () => {
   console.log("\n  Shutting down...");
-  bot.stop();
-});
-process.on("SIGINT", () => {
-  console.log("\n  Shutting down...");
-  bot.stop();
-});
+  await client.stopEvents();
+  await server.stop();
+  await bot.stop();
+  process.exit(0);
+};
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 await stop;

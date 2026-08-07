@@ -20,6 +20,7 @@ const baseConfig: Config = {
   workdirRoot: "/tmp",
   workdirBrowseEnabled: false,
   skipPermissions: false,
+  servePort: 4096,
   mimoCliPath: "mimo",
   runTimeoutMs: 0,
   showText: "full",
@@ -352,10 +353,10 @@ describe("formatEventFull tool_script", () => {
 
 describe("createBot command registration", () => {
   it("registers all commands without throwing", () => {
-    const bot = createBot(baseConfig);
-    // grammy exposes the number of registered handlers via the internal
-    // composer; we just assert the bot object is usable.
+    const { bot, client, server } = createBot(baseConfig);
     expect(bot).toBeDefined();
+    expect(client).toBeDefined();
+    expect(server).toBeDefined();
     // Calling bot.start is network-bound, so we stop here — registration
     // itself (including /think) is the behavior under test.
   });
